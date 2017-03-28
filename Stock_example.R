@@ -1,5 +1,6 @@
 library(prophet)
 library(BatchGetSymbols)
+library(purrr)
 
 my.stocks <- GetSP500Stocks()$ticker
 
@@ -31,13 +32,13 @@ est.model.and.forecast <- function(df.in, nfor = 5){
   require(dplyr)
   
   my.ticker <- df.in$ticker[1]
-  
+  #df.in <-  df.stocks %>% filter(ticker == my.ticker)
   #cat('\nProcessing ', my.ticker)
   
   n.row <- nrow(df.in)
   df.in$ret <- with(df.in, c(NA,price.adjusted[2:n.row]/price.adjusted[1:(n.row - 1)] - 1))
   
-  df.in <- select(df.in, ref.date, ret)
+  df.in <- select(df.in, ref.date, price.adjusted)
   names(df.in) <- c('ds', 'y')
   
   idx <- nrow(df.in) - nfor
@@ -46,13 +47,20 @@ est.model.and.forecast <- function(df.in, nfor = 5){
   df.for <- df.in[(idx + 1):nrow(df.in), ]
   
   capture.output(
-    m <- prophet(df = df.est)
+    m <- prophet(df = df.est, growth = "linear", changepoints = NULL,
+                 n.changepoints = 25, yearly.seasonality = FALSE,
+                 weekly.seasonality = TRUE, holidays = NULL,
+                 seasonality.prior.scale = 10, changepoint.prior.scale = 0.05,
+                 holidays.prior.scale = 10, mcmc.samples = 0, interval.width = 0.8,
+                 uncertainty.samples = 1000, fit = TRUE)
   )
   
   # forecast 50 days ahead (it also includes non trading days)
   df.pred <- predict(m,
                      make_future_dataframe(m,
-                                           periods = nfor + 50))
+                                           periods = nfor))
+  
+  p1 <- plot(m, df.pred)
   
   
   df.for <- merge(df.for, df.pred, by = 'ds')
@@ -65,22 +73,22 @@ est.model.and.forecast <- function(df.in, nfor = 5){
   df.for$nfor <- 1:nrow(df.for)
   df.for$ticker <- my.ticker
   
-  return(df.for)
+  return(list(df.for, p1))
   
 }
 
 # In this object you’ll find the forecasts (yhat), the actual values (y), the absolute and normalized error (abs.eps, perc.eps).
 
-out.l <- by(data = df.stocks,
-            INDICES = df.stocks$ticker, 
-            FUN = est.model.and.forecast, nfor = 5)
+out.l <- df.stocks %>% split(., "ticker") %>% 
+  map(~.x %>% est.model.and.forecast(., nfor = 10))
 
-my.result <- do.call(rbind, out.l)
+
 
 library(ggplot2)
 
 p <- ggplot(my.result, aes(x=factor(nfor), 
                            y=abs.eps, color = ticker))
+
 p <- p + geom_boxplot() + facet_wrap(~ticker)
 
 print(p)
